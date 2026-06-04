@@ -41,12 +41,46 @@ class FlightGlobe {
 
         // Instantiate Globe.gl
         this.globe = Globe()(this.container)
-            // Use gorgeous, dark, glowing earth textures
-            .globeImageUrl('//unpkg.com/three-globe/example/img/earth-night.jpg')
+            // Use gorgeous earth texture that responds to dynamic light shading
+            .globeImageUrl('//unpkg.com/three-globe/example/img/earth-blue-marble.jpg')
             .bumpImageUrl('//unpkg.com/three-globe/example/img/earth-topology.png')
             .backgroundImageUrl(null) // Transparent background to show our CSS gradient
-            .backgroundColor('rgba(0, 0, 0, 0)') // alpha transparency
+            .backgroundColor('rgba(0, 0, 0, 0)'); // alpha transparency
+
+        // Configure Globe material for moving water waves, specular shine, and night lights
+        const globeMat = this.globe.globeMaterial();
+        globeMat.specular = new THREE.Color(0x222222);
+        globeMat.shininess = 35;
+
+        const textureLoader = new THREE.TextureLoader();
+        
+        // 1. Load water specular mask
+        textureLoader.load('//unpkg.com/three-globe/example/img/earth-water.png', (specularTex) => {
+            globeMat.specularMap = specularTex;
+            globeMat.needsUpdate = true;
+        });
+
+        // 2. Load city night lights emissive map
+        textureLoader.load('//unpkg.com/three-globe/example/img/earth-night.jpg', (nightTex) => {
+            globeMat.emissiveMap = nightTex;
+            globeMat.emissive = new THREE.Color(0xffffdd);
+            globeMat.emissiveIntensity = 1.5;
+            globeMat.needsUpdate = true;
+        });
+
+        // 3. Generate and assign procedural water normal map for animated ripples
+        const waterCanvas = this._generateWaterNormalMap();
+        const waterTexture = new THREE.CanvasTexture(waterCanvas);
+        waterTexture.wrapS = THREE.RepeatWrapping;
+        waterTexture.wrapT = THREE.RepeatWrapping;
+        waterTexture.repeat.set(50, 25);
+        this.waterTexture = waterTexture;
+        
+        globeMat.normalMap = waterTexture;
+        globeMat.normalScale = new THREE.Vector2(0.12, 0.12);
+        globeMat.needsUpdate = true;
             
+        this.globe
             // Markers for Swedish Hub Airports
             .pointsData(this.airports)
             .pointLat('lat')
@@ -65,6 +99,11 @@ class FlightGlobe {
             .onPointClick(point => {
                 if (this.onAirportClick) {
                     this.onAirportClick(point.code);
+                }
+            })
+            .onArcClick(arc => {
+                if (this.onFlightClick) {
+                    this.onFlightClick(arc.id);
                 }
             })
 
@@ -102,19 +141,16 @@ class FlightGlobe {
             .ringsData([])
             .ringLat('lat')
             .ringLng('lon')
-            .ringColor(() => 'rgba(0, 240, 255, 0.45)') // Subtle glowing cyan radar ripple
-            .ringMaxRadius(4.5)
-            .ringPropagationSpeed(3.0)
-            .ringRepeatPeriod(900)
+            .ringColor(d => d.color || 'rgba(0, 240, 255, 0.45)') // Dynamic color support
+            .ringMaxRadius(d => d.maxRadius || 4.5)               // Dynamic size support
+            .ringPropagationSpeed(d => d.speed || 3.0)           // Dynamic speed/propagation support
+            .ringRepeatPeriod(d => d.repeatPeriod || 900)        // Dynamic timing support
 
             // Custom ThreeJS Layer for Animated 3D Airplanes
             .customLayerData([])
             .customThreeObject(d => {
                 const airplane = new THREE.Group();
-                
-                // Fuselage (Cone shape pointing forward)
-                const bodyGeom = new THREE.ConeGeometry(0.32, 1.6, 8);
-                bodyGeom.rotateX(Math.PI / 2); // Rotate to point forward along the Z axis
+                const aircraftType = (d.aircraft || "B737").toUpperCase();
                 
                 // Emissive neon material that glows in the dark
                 const mat = new THREE.MeshBasicMaterial({
@@ -123,38 +159,221 @@ class FlightGlobe {
                     opacity: 0.95
                 });
                 
-                const body = new THREE.Mesh(bodyGeom, mat);
-                airplane.add(body);
+                // Propeller blades material (highly visible white)
+                const propMat = new THREE.MeshBasicMaterial({
+                    color: 0xffffff,
+                    transparent: false
+                });
                 
-                // Wings (Thin flattened box)
-                const wingsGeom = new THREE.BoxGeometry(2.0, 0.03, 0.45);
-                const wings = new THREE.Mesh(wingsGeom, mat);
-                wings.position.set(0, -0.04, 0.1);
-                airplane.add(wings);
+                // Jet engine thruster core material (bright orange fire)
+                const engineMat = new THREE.MeshBasicMaterial({ color: '#ff6c00' });
+
+                // Wing tip and strobe light materials
+                const wingRedMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+                const wingGreenMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+                const strobeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
                 
-                // Tail Fin (Vertical box)
-                const tailGeom = new THREE.BoxGeometry(0.03, 0.55, 0.3);
-                const tail = new THREE.Mesh(tailGeom, mat);
-                tail.position.set(0, 0.25, -0.55);
-                airplane.add(tail);
-                
-                // Throttled engine glow thrusters (Bright orange flame meshes)
-                const engineGeom = new THREE.BoxGeometry(0.1, 0.1, 0.25);
-                const engineMat = new THREE.MeshBasicMaterial({ color: '#ffb700' });
-                
-                const leftEngine = new THREE.Mesh(engineGeom, engineMat);
-                leftEngine.position.set(-0.3, -0.08, -0.28);
-                airplane.add(leftEngine);
-                
-                const rightEngine = new THREE.Mesh(engineGeom, engineMat);
-                rightEngine.position.set(0.3, -0.08, -0.28);
-                airplane.add(rightEngine);
+                if (aircraftType.includes("ATR") || 
+                    aircraftType.includes("AT7") || 
+                    aircraftType.includes("AT4") || 
+                    aircraftType.includes("DH4") || 
+                    aircraftType.includes("DASH") || 
+                    aircraftType.includes("SF3") || 
+                    aircraftType.includes("SAAB")) {
+                    // --- 1. Regional Turboprop (e.g. ATR-72) ---
+                    // Fuselage (slender cone)
+                    const bodyGeom = new THREE.ConeGeometry(0.22, 1.25, 8);
+                    bodyGeom.rotateX(Math.PI / 2);
+                    const body = new THREE.Mesh(bodyGeom, mat);
+                    airplane.add(body);
+                    
+                    // Wings (straight, high aspect ratio)
+                    const wingsGeom = new THREE.BoxGeometry(1.8, 0.03, 0.35);
+                    const wings = new THREE.Mesh(wingsGeom, mat);
+                    wings.position.set(0, 0.05, 0.15);
+                    airplane.add(wings);
+                    
+                    // Tail Fin (high T-tail)
+                    const tailGeom = new THREE.BoxGeometry(0.03, 0.45, 0.25);
+                    const tail = new THREE.Mesh(tailGeom, mat);
+                    tail.position.set(0, 0.25, -0.45);
+                    airplane.add(tail);
+                    
+                    // Two Engine Nacelles on wings
+                    const engGeom = new THREE.BoxGeometry(0.12, 0.12, 0.32);
+                    const engLeft = new THREE.Mesh(engGeom, mat);
+                    engLeft.position.set(-0.4, 0.04, 0.18);
+                    airplane.add(engLeft);
+                    
+                    const engRight = new THREE.Mesh(engGeom, mat);
+                    engRight.position.set(0.4, 0.04, 0.18);
+                    airplane.add(engRight);
+                    
+                    // Spin Propellers (named for frame animations)
+                    const propGeom = new THREE.BoxGeometry(0.48, 0.04, 0.02);
+                    const propLeft = new THREE.Mesh(propGeom, propMat);
+                    propLeft.name = "propLeft";
+                    propLeft.position.set(-0.4, 0.04, 0.35);
+                    airplane.add(propLeft);
+                    
+                    const propRight = new THREE.Mesh(propGeom, propMat);
+                    propRight.name = "propRight";
+                    propRight.position.set(0.4, 0.04, 0.35);
+                    airplane.add(propRight);
+
+                    // Blinking navigation and strobe lights
+                    const lightRed = new THREE.Mesh(new THREE.SphereGeometry(0.04, 4, 4), wingRedMat);
+                    lightRed.name = "wingRed";
+                    lightRed.position.set(-0.9, 0.05, 0.15);
+                    airplane.add(lightRed);
+                    
+                    const lightGreen = new THREE.Mesh(new THREE.SphereGeometry(0.04, 4, 4), wingGreenMat);
+                    lightGreen.name = "wingGreen";
+                    lightGreen.position.set(0.9, 0.05, 0.15);
+                    airplane.add(lightGreen);
+                    
+                    const strobe = new THREE.Mesh(new THREE.SphereGeometry(0.04, 4, 4), strobeMat);
+                    strobe.name = "strobe";
+                    strobe.position.set(0, 0.48, -0.45); // tail fin tip
+                    airplane.add(strobe);
+                    
+                } else if (aircraftType.includes("380") || aircraftType.includes("350") || aircraftType.includes("777") || aircraftType.includes("787")) {
+                    // --- 2. Jumbo / Heavy Widebody Jet (4 Engines) ---
+                    // Fuselage (large thick cone)
+                    const bodyGeom = new THREE.ConeGeometry(0.42, 2.0, 10);
+                    bodyGeom.rotateX(Math.PI / 2);
+                    const body = new THREE.Mesh(bodyGeom, mat);
+                    airplane.add(body);
+                    
+                    // Wings (long and swept back)
+                    const wingsGeom = new THREE.BoxGeometry(2.7, 0.04, 0.55);
+                    const wings = new THREE.Mesh(wingsGeom, mat);
+                    wings.position.set(0, -0.05, 0.2);
+                    airplane.add(wings);
+                    
+                    // Tail Fin
+                    const tailGeom = new THREE.BoxGeometry(0.04, 0.65, 0.35);
+                    const tail = new THREE.Mesh(tailGeom, mat);
+                    tail.position.set(0, 0.32, -0.7);
+                    airplane.add(tail);
+                    
+                    // 4 Jet Engines under wings (2 on each side)
+                    const engGeom = new THREE.BoxGeometry(0.12, 0.12, 0.38);
+                    const engineXCoords = [-0.5, -0.9, 0.5, 0.9];
+                    
+                    engineXCoords.forEach(x => {
+                        const engine = new THREE.Mesh(engGeom, mat);
+                        engine.position.set(x, -0.12, 0.12);
+                        airplane.add(engine);
+                        
+                        // Orange jet thruster fire glow behind engines
+                        const flameGeom = new THREE.BoxGeometry(0.07, 0.07, 0.22);
+                        const flame = new THREE.Mesh(flameGeom, engineMat);
+                        flame.position.set(x, -0.12, -0.12);
+                        airplane.add(flame);
+                    });
+
+                    // Blinking navigation and strobe lights
+                    const lightRed = new THREE.Mesh(new THREE.SphereGeometry(0.05, 4, 4), wingRedMat);
+                    lightRed.name = "wingRed";
+                    lightRed.position.set(-1.35, -0.05, 0.2);
+                    airplane.add(lightRed);
+                    
+                    const lightGreen = new THREE.Mesh(new THREE.SphereGeometry(0.05, 4, 4), wingGreenMat);
+                    lightGreen.name = "wingGreen";
+                    lightGreen.position.set(1.35, -0.05, 0.2);
+                    airplane.add(lightGreen);
+                    
+                    const strobe = new THREE.Mesh(new THREE.SphereGeometry(0.05, 4, 4), strobeMat);
+                    strobe.name = "strobe";
+                    strobe.position.set(0, 0.65, -0.7); // tail fin tip
+                    airplane.add(strobe);
+                    
+                } else {
+                    // --- 3. Standard Jet (2 Engines) ---
+                    // Fuselage
+                    const bodyGeom = new THREE.ConeGeometry(0.32, 1.6, 8);
+                    bodyGeom.rotateX(Math.PI / 2);
+                    const body = new THREE.Mesh(bodyGeom, mat);
+                    airplane.add(body);
+                    
+                    // Wings
+                    const wingsGeom = new THREE.BoxGeometry(2.0, 0.03, 0.45);
+                    const wings = new THREE.Mesh(wingsGeom, mat);
+                    wings.position.set(0, -0.04, 0.1);
+                    airplane.add(wings);
+                    
+                    // Tail Fin
+                    const tailGeom = new THREE.BoxGeometry(0.03, 0.55, 0.3);
+                    const tail = new THREE.Mesh(tailGeom, mat);
+                    tail.position.set(0, 0.25, -0.55);
+                    airplane.add(tail);
+                    
+                    // 2 Jet Engines
+                    const engineGeom = new THREE.BoxGeometry(0.1, 0.1, 0.25);
+                    
+                    const leftEngine = new THREE.Mesh(engineGeom, mat);
+                    leftEngine.position.set(-0.35, -0.08, 0.05);
+                    airplane.add(leftEngine);
+                    
+                    const rightEngine = new THREE.Mesh(engineGeom, mat);
+                    rightEngine.position.set(0.35, -0.08, 0.05);
+                    airplane.add(rightEngine);
+                    
+                    // Throttled engine glow thrusters (Bright orange flame meshes)
+                    const flameGeom = new THREE.BoxGeometry(0.06, 0.06, 0.15);
+                    const leftFlame = new THREE.Mesh(flameGeom, engineMat);
+                    leftFlame.position.set(-0.35, -0.08, -0.1);
+                    airplane.add(leftFlame);
+                    
+                    const rightFlame = new THREE.Mesh(flameGeom, engineMat);
+                    rightFlame.position.set(0.35, -0.08, -0.1);
+                    airplane.add(rightFlame);
+
+                    // Blinking navigation and strobe lights
+                    const lightRed = new THREE.Mesh(new THREE.SphereGeometry(0.04, 4, 4), wingRedMat);
+                    lightRed.name = "wingRed";
+                    lightRed.position.set(-1.0, -0.04, 0.1);
+                    airplane.add(lightRed);
+                    
+                    const lightGreen = new THREE.Mesh(new THREE.SphereGeometry(0.04, 4, 4), wingGreenMat);
+                    lightGreen.name = "wingGreen";
+                    lightGreen.position.set(1.0, -0.04, 0.1);
+                    airplane.add(lightGreen);
+                    
+                    const strobe = new THREE.Mesh(new THREE.SphereGeometry(0.04, 4, 4), strobeMat);
+                    strobe.name = "strobe";
+                    strobe.position.set(0, 0.55, -0.55); // tail fin tip
+                    airplane.add(strobe);
+                }
                 
                 return airplane;
             })
             .customThreeObjectUpdate((obj, d) => {
                 try {
                     const progress = d.progress;
+                    
+                    // Propeller animation rotation (ATR-72 turboprops)
+                    const propLeft = obj.getObjectByName("propLeft");
+                    const propRight = obj.getObjectByName("propRight");
+                    if (propLeft) propLeft.rotation.z += 0.5;
+                    if (propRight) propRight.rotation.z += 0.5;
+
+                    // Blinking navigation and strobe lights
+                    const wingRed = obj.getObjectByName("wingRed");
+                    const wingGreen = obj.getObjectByName("wingGreen");
+                    const strobe = obj.getObjectByName("strobe");
+                    
+                    // Strobe flashes rapidly (e.g. short double-flash every 1.2 seconds)
+                    const time = Date.now();
+                    const cycle = time % 1200;
+                    const isStrobeOn = (cycle > 0 && cycle < 60) || (cycle > 180 && cycle < 240);
+                    if (strobe) strobe.visible = isStrobeOn;
+                    
+                    // Wingtip lights blink slowly (1Hz)
+                    const isWingOn = (time % 1000) < 500;
+                    if (wingRed) wingRed.visible = isWingOn;
+                    if (wingGreen) wingGreen.visible = isWingOn;
                     
                     // Simple linear interpolation of latitude and longitude
                     const lat = d.startLat + (d.endLat - d.startLat) * progress;
@@ -207,6 +426,62 @@ class FlightGlobe {
 
         // Draw initial radar sync rings centered at default active hub
         this._updateRings();
+
+        // Inject dynamic day/night terminator lighting and spinning clouds layer
+        setTimeout(() => {
+            const scene = this.globe.scene();
+            if (!scene) return;
+
+            // 1. Clear default Globe.gl wash-out lights
+            const lightsToRemove = [];
+            scene.traverse(child => {
+                if (child.isLight) {
+                    lightsToRemove.push(child);
+                }
+            });
+            lightsToRemove.forEach(l => scene.remove(l));
+
+            // 2. Add custom Ambient Light (soft celestial backing)
+            const spaceAmbient = new THREE.AmbientLight(0xffffff, 0.18);
+            scene.add(spaceAmbient);
+
+            // 3. Add dynamic Directional Light (representing the Sun based on real UTC time)
+            const sunLight = new THREE.DirectionalLight(0xffffff, 1.4);
+            sunLight.name = "sunLight";
+
+            const now = new Date();
+            const dayOfYear = (Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) - Date.UTC(now.getFullYear(), 0, 0)) / 24 / 60 / 60 / 1000;
+            const sunLat = 23.45 * Math.sin((2 * Math.PI / 365) * (dayOfYear - 80)); // Sun Declination Angle
+            const sunLng = 180 - (now.getUTCHours() + now.getUTCMinutes() / 60 + now.getUTCSeconds() / 3600) * 15; // Sun Longitude
+
+            const rad = 400;
+            const phi = (90 - sunLat) * Math.PI / 180;
+            const theta = (sunLng + 180) * Math.PI / 180;
+            sunLight.position.x = -rad * Math.sin(phi) * Math.sin(theta);
+            sunLight.position.y = rad * Math.cos(phi);
+            sunLight.position.z = rad * Math.sin(phi) * Math.cos(theta);
+            scene.add(sunLight);
+
+            // 4. Add concentric atmospheric rotating 3D cloud layer
+            const globeRadius = this.globe.getGlobeRadius();
+            const cloudsGeom = new THREE.SphereGeometry(globeRadius * 1.008, 75, 75);
+            
+            const textureLoader2 = new THREE.TextureLoader();
+            textureLoader2.load('//unpkg.com/three-globe/example/img/earth-clouds.png', (cloudsTexture) => {
+                const cloudsMat = new THREE.MeshPhongMaterial({
+                    map: cloudsTexture,
+                    transparent: true,
+                    opacity: 0.32,
+                    blending: THREE.NormalBlending
+                });
+                
+                const cloudsMesh = new THREE.Mesh(cloudsGeom, cloudsMat);
+                cloudsMesh.name = "clouds";
+                cloudsMesh.raycast = () => {}; // Disable raycast to prevent clouds from blocking click events
+                scene.add(cloudsMesh);
+                this.cloudsMesh = cloudsMesh;
+            });
+        }, 120);
     }
 
     /**
@@ -223,15 +498,27 @@ class FlightGlobe {
     _updateRings() {
         if (!this.globe) return;
         
+        const rings = [];
+        
+        // 1. Active Hub radar sweep
         const hub = this.airports.find(a => a.code === this.activeHubCode);
         if (hub) {
-            this.globe.ringsData([{
+            rings.push({
                 lat: hub.lat,
-                lon: hub.lon
-            }]);
-        } else {
-            this.globe.ringsData([]);
+                lon: hub.lon,
+                color: 'rgba(0, 240, 255, 0.35)',
+                maxRadius: 4.5,
+                speed: 2.5,
+                repeatPeriod: 1200
+            });
         }
+        
+        // 2. Target weather warning sweep
+        if (this.weatherEffect) {
+            rings.push(this.weatherEffect);
+        }
+        
+        this.globe.ringsData(rings);
     }
 
     /**
@@ -239,6 +526,17 @@ class FlightGlobe {
      */
     _startAnimationLoop() {
         const animate = () => {
+            // Rotate the 3D clouds slowly in the opposite direction
+            if (this.cloudsMesh) {
+                this.cloudsMesh.rotation.y += 0.00015;
+            }
+
+            // Animate moving water waves
+            if (this.waterTexture) {
+                this.waterTexture.offset.x += 0.00025;
+                this.waterTexture.offset.y += 0.00015;
+            }
+
             if (this.globe && this.currentFlights.length > 0) {
                 // Render and animate 3D airplanes for all active routes on the globe
                 const flyingFlights = this.currentFlights;
@@ -270,7 +568,8 @@ class FlightGlobe {
                         endLon: f.destLon,
                         distance: f.telemetry.distance || 500,
                         progress: f.telemetry.progress,
-                        color: isSelected ? this.colors.magenta : this.colors.cyan
+                        color: isSelected ? this.colors.magenta : this.colors.cyan,
+                        aircraft: f.aircraft || "B737" // Pass aircraft type to feed customThreeObject builder
                     };
                 });
                 
@@ -364,5 +663,92 @@ class FlightGlobe {
         }
 
         this.globe.pointOfView({ lat: 60.5, lng: 18.0, altitude: 1.85 }, 1200);
+    }
+
+    /**
+     * Generates a procedural water wave normal map on a canvas
+     */
+    _generateWaterNormalMap() {
+        const size = 256;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const imgData = ctx.createImageData(size, size);
+        
+        for (let y = 0; y < size; y++) {
+            for (let x = 0; x < size; x++) {
+                // Overlay multiple high-frequency sine/cosine waves for a shimmering liquid texture
+                const nx = Math.sin(x / 4.0) * 0.3 + Math.sin((x + y) / 8.0) * 0.25 + Math.cos((x - y) / 6.0) * 0.15;
+                const ny = Math.cos(y / 4.0) * 0.3 + Math.cos((x - y) / 8.0) * 0.25 + Math.sin((x + y) / 6.0) * 0.15;
+                
+                // pack into rgb normal vector space
+                const r = Math.floor((nx + 1) * 127.5);
+                const g = Math.floor((ny + 1) * 127.5);
+                const b = 255;
+                
+                const idx = (y * size + x) * 4;
+                imgData.data[idx] = r;
+                imgData.data[idx+1] = g;
+                imgData.data[idx+2] = b;
+                imgData.data[idx+3] = 255;
+            }
+        }
+        ctx.putImageData(imgData, 0, 0);
+        return canvas;
+    }
+
+    /**
+     * Configures the destination airport's weather warning sweep rings
+     */
+    setWeatherEffect(lat, lon, weatherCode) {
+        if (weatherCode === undefined || weatherCode === null) {
+            this.weatherEffect = null;
+            this._updateRings();
+            return;
+        }
+
+        let color = 'rgba(0, 240, 255, 0.45)';
+        let maxRadius = 3.0;
+        let speed = 2.0;
+        let repeatPeriod = 1000;
+
+        if (weatherCode >= 95) { // Thunderstorm
+            color = 'rgba(255, 0, 90, 0.75)'; // Flashing warning magenta/red
+            maxRadius = 3.6;
+            speed = 4.5;
+            repeatPeriod = 600;
+        } else if ((weatherCode >= 51 && weatherCode <= 67) || (weatherCode >= 80 && weatherCode <= 82)) { // Rain / Drizzle / Showers
+            color = 'rgba(0, 150, 255, 0.65)'; // Stormy rain blue
+            maxRadius = 2.8;
+            speed = 2.0;
+            repeatPeriod = 1000;
+        } else if ((weatherCode >= 71 && weatherCode <= 77) || (weatherCode >= 85 && weatherCode <= 86)) { // Snow / Ice
+            color = 'rgba(225, 240, 255, 0.7)'; // Frozen white-blue
+            maxRadius = 2.5;
+            speed = 1.0; // Slow drift
+            repeatPeriod = 1600;
+        } else if (weatherCode === 45 || weatherCode === 48) { // Fog
+            color = 'rgba(160, 170, 195, 0.55)'; // Fog gray
+            maxRadius = 2.2;
+            speed = 0.8;
+            repeatPeriod = 2200;
+        } else { // Clear / Partly Cloudy
+            color = 'rgba(57, 255, 20, 0.45)'; // Calm neon green
+            maxRadius = 2.4;
+            speed = 1.6;
+            repeatPeriod = 1200;
+        }
+
+        this.weatherEffect = {
+            lat,
+            lon,
+            color,
+            maxRadius,
+            speed,
+            repeatPeriod
+        };
+
+        this._updateRings();
     }
 }

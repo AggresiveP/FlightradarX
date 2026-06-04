@@ -48,6 +48,9 @@ async function initApp() {
     // Set up search filter input
     setupSearchFilter();
 
+    // Set up audio dashboard controller
+    setupAudioControl();
+
     // Initialize Swedavia Heartbeat Diagnostics
     await fetchHeartbeat();
     setInterval(fetchHeartbeat, 30000); // refresh every 30s
@@ -55,6 +58,9 @@ async function initApp() {
     // Fetch and draw airports metadata list
     const response = await fetch("/api/airports");
     const airportsMeta = await response.json();
+
+    // Generate global background flights
+    STATE.globalFlights = generateGlobalBackgroundFlights(40);
 
     // Instantiate and draw 3D Earth Globe
     STATE.globeInstance = new FlightGlobe("globe-container", (airportCode) => {
@@ -65,6 +71,16 @@ async function initApp() {
             handleAirportChange(airportCode);
         }
     });
+
+    // Callback when clicking a flight arc on the 3D globe
+    STATE.globeInstance.onFlightClick = (flightId) => {
+        const combined = [...STATE.flights, ...STATE.globalFlights];
+        const flight = combined.find(f => f.id === flightId);
+        if (flight) {
+            selectFlight(flight);
+        }
+    };
+
     STATE.globeInstance.init(airportsMeta);
     STATE.globeInstance.setActiveHub(STATE.selectedAirport);
 
@@ -163,6 +179,39 @@ function setupSearchFilter() {
 }
 
 /**
+ * Connects UI click events and schedulers to Cockpit Audio Engine
+ */
+function setupAudioControl() {
+    const btn = document.getElementById("sound-toggle-btn");
+    if (!btn) return;
+    
+    btn.addEventListener("click", () => {
+        if (!window.audioSuite) return;
+        
+        const isMuted = window.audioSuite.toggleMute();
+        
+        const unmutedIcon = document.getElementById("sound-icon-unmuted");
+        const mutedIcon = document.getElementById("sound-icon-muted");
+        const statusText = document.getElementById("sound-status-text");
+        
+        if (isMuted) {
+            btn.classList.add("muted");
+            unmutedIcon.style.display = "none";
+            mutedIcon.style.display = "block";
+            statusText.textContent = "Audio Off";
+        } else {
+            btn.classList.remove("muted");
+            unmutedIcon.style.display = "block";
+            mutedIcon.style.display = "none";
+            statusText.textContent = "Audio On";
+            
+            // Play initial confirmation radar sweep ping
+            window.audioSuite.playSonarPing();
+        }
+    });
+}
+
+/**
  * Loads Airport Arrivals/Departures from FastAPI server
  */
 async function loadAirportData() {
@@ -179,11 +228,6 @@ async function loadAirportData() {
         
         STATE.flights = data.flights || [];
         applyFiltersAndRender();
-        
-        // Pass flight list to the 3D globe to render beautiful cyber arcs
-        if (STATE.globeInstance) {
-            STATE.globeInstance.updateFlights(STATE.flights);
-        }
 
         // Render dashboard statistics if active
         if (STATE.activeTab === "dashboard") {
@@ -213,6 +257,12 @@ function applyFiltersAndRender() {
     }
     
     renderFlightTable();
+
+    // Update 3D Globe with filtered hub flights + all global background flights
+    if (STATE.globeInstance) {
+        const combinedFlights = [...STATE.filteredFlights, ...(STATE.globalFlights || [])];
+        STATE.globeInstance.updateFlights(combinedFlights);
+    }
 }
 
 /**
@@ -299,9 +349,26 @@ function renderFlightTable() {
 function selectFlight(flight) {
     STATE.selectedFlight = flight;
     
+    // Play cyber lock-on chime sequence & pilot voice talk
+    if (window.audioSuite && !window.audioSuite.isMuted) {
+        window.audioSuite.playTargetLock();
+        
+        // Play randomized pilot radio transmission talk
+        const alt = (flight.telemetry && flight.telemetry.altitude) || 10000;
+        const speed = (flight.telemetry && flight.telemetry.speed) || 800;
+        window.audioSuite.playPilotTalk(
+            flight.flightNumber,
+            flight.originCity || flight.origin,
+            flight.destCity || flight.destination,
+            alt,
+            speed
+        );
+    }
+    
     // Focus camera on the 3D globe
     if (STATE.globeInstance) {
         STATE.globeInstance.selectFlight(flight);
+        STATE.globeInstance.setWeatherEffect(null); // Clear previous weather sweep immediately
     }
 
     // Clear any previous HUD simulations
@@ -545,6 +612,11 @@ async function fetchFlightWeather(flight) {
     destTemp.innerHTML = `${Math.round(destWeather.temp)}<span>°C</span>`;
     destCond.textContent = destWeather.description;
     destWind.textContent = `🌬️ ${destWeather.windspeed} km/h`;
+
+    // Trigger weather effect sweep on 3D globe if this is still the selected flight
+    if (STATE.selectedFlight && STATE.selectedFlight.id === flight.id && STATE.globeInstance) {
+        STATE.globeInstance.setWeatherEffect(flight.destLat, flight.destLon, destWeather.code);
+    }
 }
 
 async function getWeather(lat, lon) {
@@ -728,6 +800,9 @@ function renderPagination(totalCount) {
 function resetDetailsSidebar() {
     document.getElementById("sidebar-placeholder").style.display = "flex";
     document.getElementById("sidebar-details").style.display = "none";
+    if (STATE.globeInstance) {
+        STATE.globeInstance.setWeatherEffect(null);
+    }
 }
 
 // Table Status States Display
@@ -769,4 +844,101 @@ function showTableError(msg) {
 
 function formatClockTime(date) {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+}
+
+/**
+ * Generates background global flights to populate the 3D globe and make it feel alive.
+ */
+function generateGlobalBackgroundFlights(count) {
+    const GLOBAL_AIRPORTS = [
+        { code: "JFK", city: "New York", country: "USA", name: "John F. Kennedy International Airport", lat: 40.6413, lon: -73.7781 },
+        { code: "LHR", city: "London", country: "UK", name: "London Heathrow Airport", lat: 51.4700, lon: -0.4543 },
+        { code: "CDG", city: "Paris", country: "France", name: "Paris Charles de Gaulle Airport", lat: 49.0097, lon: 2.5479 },
+        { code: "DXB", city: "Dubai", country: "UAE", name: "Dubai International Airport", lat: 25.2532, lon: 55.3657 },
+        { code: "SIN", city: "Singapore", country: "Singapore", name: "Singapore Changi Airport", lat: 1.3644, lon: 103.9915 },
+        { code: "HND", city: "Tokyo", country: "Japan", name: "Tokyo Haneda Airport", lat: 35.5494, lon: 139.7798 },
+        { code: "SYD", city: "Sydney", country: "Australia", name: "Sydney Airport", lat: -33.9461, lon: 151.1772 },
+        { code: "LAX", city: "Los Angeles", country: "USA", name: "Los Angeles International Airport", lat: 33.9416, lon: -118.4085 },
+        { code: "ORD", city: "Chicago", country: "USA", name: "O'Hare International Airport", lat: 41.9742, lon: -87.9073 },
+        { code: "FRA", city: "Frankfurt", country: "Germany", name: "Frankfurt Airport", lat: 50.0379, lon: 8.5622 },
+        { code: "AMS", city: "Amsterdam", country: "Netherlands", name: "Amsterdam Airport Schiphol", lat: 52.3105, lon: 4.7683 },
+        { code: "HKG", city: "Hong Kong", country: "China", name: "Hong Kong International Airport", lat: 22.3080, lon: 113.9185 },
+        { code: "PEK", city: "Beijing", country: "China", name: "Beijing Capital International Airport", lat: 40.0799, lon: 116.6031 },
+        { code: "IST", city: "Istanbul", country: "Turkey", name: "Istanbul Airport", lat: 41.2753, lon: 28.7519 },
+        { code: "SFO", city: "San Francisco", country: "USA", name: "San Francisco International Airport", lat: 37.6213, lon: -122.3790 },
+        { code: "ICN", city: "Seoul", country: "South Korea", name: "Incheon International Airport", lat: 37.4602, lon: 126.4407 }
+    ];
+
+    const AIRLINE_CHOICES = [
+        { name: "United Airlines", code: "UA", aircrafts: ["B777", "B787"] },
+        { name: "Delta Air Lines", code: "DL", aircrafts: ["A350", "B767"] },
+        { name: "American Airlines", code: "AA", aircrafts: ["B777", "B787"] },
+        { name: "Lufthansa", code: "LH", aircrafts: ["A350", "A380"] },
+        { name: "British Airways", code: "BA", aircrafts: ["B777", "A380"] },
+        { name: "Air France", code: "AF", aircrafts: ["B777", "A350"] },
+        { name: "Emirates", code: "EK", aircrafts: ["A380", "B777"] },
+        { name: "Singapore Airlines", code: "SQ", aircrafts: ["A350", "B787"] },
+        { name: "All Nippon Airways", code: "NH", aircrafts: ["B787", "B777"] },
+        { name: "Qantas", code: "QF", aircrafts: ["B787", "A380"] },
+        { name: "Cathay Pacific", code: "CX", aircrafts: ["A350", "B777"] }
+    ];
+
+    const flights = [];
+    for (let i = 0; i < count; i++) {
+        let origIdx = Math.floor(Math.random() * GLOBAL_AIRPORTS.length);
+        let destIdx = Math.floor(Math.random() * GLOBAL_AIRPORTS.length);
+        while (destIdx === origIdx) {
+            destIdx = Math.floor(Math.random() * GLOBAL_AIRPORTS.length);
+        }
+
+        const origin = GLOBAL_AIRPORTS[origIdx];
+        const destination = GLOBAL_AIRPORTS[destIdx];
+
+        const airline = AIRLINE_CHOICES[Math.floor(Math.random() * AIRLINE_CHOICES.length)];
+        const flNum = Math.floor(Math.random() * 8900) + 100;
+        const flightNumber = `${airline.code}${flNum}`;
+        const aircraft = airline.aircrafts[Math.floor(Math.random() * airline.aircrafts.length)];
+
+        const progress = Math.random();
+        const heading = Math.floor(Math.random() * 360);
+
+        flights.push({
+            id: `global_${i}`,
+            flightNumber,
+            airline: airline.name,
+            airlineCode: airline.code,
+            origin: origin.code,
+            destination: destination.code,
+            originName: origin.name,
+            originCity: origin.city,
+            originCountry: origin.country,
+            originLat: origin.lat,
+            originLon: origin.lon,
+            destName: destination.name,
+            destCity: destination.city,
+            destCountry: destination.country,
+            destLat: destination.lat,
+            destLon: destination.lon,
+            scheduledTime: new Date(Date.now() - 3600000).toISOString(),
+            actualTime: new Date(Date.now() + 3600000).toISOString(),
+            status: "In Air",
+            statusText: "In Air",
+            gate: "Gate " + Math.floor(Math.random() * 50 + 1),
+            baggageBelt: "-",
+            terminal: String(Math.floor(Math.random() * 4 + 1)),
+            aircraft: aircraft,
+            telemetry: {
+                altitude: Math.floor(Math.random() * 2000) + 10000,
+                speed: Math.floor(Math.random() * 100) + 800,
+                heading: heading,
+                latitude: origin.lat + (destination.lat - origin.lat) * progress,
+                longitude: origin.lon + (destination.lon - origin.lon) * progress,
+                progress: progress,
+                elapsed: 60,
+                duration: 120,
+                distance: 4500
+            }
+        });
+    }
+    return flights;
 }

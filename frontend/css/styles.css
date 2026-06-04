@@ -166,6 +166,56 @@ header {
     background: rgba(255, 255, 255, 0.08);
 }
 
+
+/* Sound Toggle Button */
+.sound-toggle-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-light);
+    border-radius: 20px;
+    padding: 6px 14px;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    outline: none;
+    text-transform: uppercase;
+}
+
+.sound-toggle-btn.muted {
+    border-color: rgba(255, 7, 58, 0.25);
+    color: var(--text-muted);
+}
+
+.sound-toggle-btn:not(.muted) {
+    color: var(--color-cyan);
+    border-color: var(--color-cyan);
+    background: rgba(0, 240, 255, 0.05);
+    box-shadow: 0 0 10px rgba(0, 240, 255, 0.15);
+}
+
+.sound-toggle-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--color-cyan);
+    color: #ffffff;
+}
+
+.sound-toggle-btn.muted:hover {
+    border-color: var(--color-red);
+    color: var(--text-secondary);
+    box-shadow: 0 0 8px rgba(255, 7, 58, 0.2);
+}
+
+.sound-icon {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+    transition: fill 0.3s ease;
+}
+
 /* System Heartbeat Widget */
 .system-status {
     display: flex;

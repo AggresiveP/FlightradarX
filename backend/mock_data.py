@@ -24,7 +24,7 @@ LOCATION_DB = get_location_database()
 
 # Mock definitions for high fidelity generation
 AIRLINES = [
-    {"name": "Scandinavian Airlines (SAS)", "code": "SK", "aircraft": ["A320neo", "A350-900", "CRJ-900"]},
+    {"name": "Scandinavian Airlines (SAS)", "code": "SK", "aircraft": ["A320neo", "A350-900", "CRJ-900", "ATR-72"]},
     {"name": "Norwegian Air Shuttle", "code": "DY", "aircraft": ["B737-800", "B737-MAX8"]},
     {"name": "Lufthansa", "code": "LH", "aircraft": ["A320neo", "A321neo", "CRJ-900"]},
     {"name": "KLM Royal Dutch Airlines", "code": "KL", "aircraft": ["B737-800", "E190"]},
